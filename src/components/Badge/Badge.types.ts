@@ -1,0 +1,1 @@
+export type BadgeVariants = 'success' | 'pending' | 'rejected' | string;

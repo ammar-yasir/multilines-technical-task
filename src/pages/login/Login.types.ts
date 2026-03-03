@@ -1,0 +1,1 @@
+export type Errors = { username?: string; password?: string };
