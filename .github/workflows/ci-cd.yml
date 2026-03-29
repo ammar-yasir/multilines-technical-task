@@ -15,7 +15,7 @@ env:
 jobs:
 
   # =========================
-  # CI (common for all)
+  # CI: lint + test + build
   # =========================
   ci:
     runs-on: ubuntu-latest
@@ -29,12 +29,19 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build
+      - name: Install
+        run: npm ci
 
-      - name: Upload build
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: build
@@ -42,13 +49,77 @@ jobs:
 
 
   # =========================
-  # Deploy DEV
+  # PR PREVIEW DEPLOYMENT
+  # =========================
+  deploy-preview:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set PR folder
+        id: pr
+        run: echo "folder=previews/pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
+
+      - name: Sync PR build to S3 (Preview)
+        run: |
+          aws s3 sync dist s3://${{ env.S3_BUCKET }}/${{ steps.pr.outputs.folder }} \
+            --delete
+
+      - name: Comment Preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.issue.number;
+            const url = `https://${{ secrets.CLOUDFRONT_DOMAIN }}/previews/pr-${pr}/`;
+
+            github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr,
+              body: `🚀 PR Preview is ready:\n\n${url}`
+            });
+
+
+  # =========================
+  # PR CLEANUP
+  # =========================
+  cleanup-preview:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+
+    steps:
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Delete PR folder from S3
+        run: |
+          aws s3 rm s3://${{ env.S3_BUCKET }}/previews/pr-${{ github.event.number }} \
+            --recursive
+
+
+  # =========================
+  # Deploy to DEV Env => AWS (S3 + CloudFront)
   # =========================
   deploy-dev:
     needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
-    environment: dev   # 👈 THIS FIXES YOUR ISSUE
+    environment: dev   # 👈 MUST match env name in GitHub
 
     steps:
       - uses: actions/download-artifact@v4
@@ -62,9 +133,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Sync to S3 (DEV)
       - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
 
-      - run: |
+      - name: Invalidate CloudFront
+        run: |
           aws cloudfront create-invalidation \
           --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
           --paths "/*"
@@ -90,7 +163,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/staging --delete
 
       - run: |
           aws cloudfront create-invalidation \
@@ -105,7 +178,7 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    environment: prod   # 👈 MUST match env name
+    environment: prod   # 👈 MUST match env name in GitHub
 
     steps:
       - uses: actions/download-artifact@v4
