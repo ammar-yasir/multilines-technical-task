@@ -6,11 +6,13 @@ on:
   pull_request:
 
 permissions:
-  id-token: write   # REQUIRED for OIDC (modern AWS auth)
+  id-token: write
   contents: read
 
 env:
   NODE_VERSION: 20
+  S3_BUCKET: ${{ secrets.S3_BUCKET }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
 
 jobs:
 
@@ -50,10 +52,12 @@ jobs:
 
   # =========================
   # PR PREVIEW DEPLOYMENT
+  # (RUNS ONLY IF CI PASSES)
   # =========================
   deploy-preview:
-    needs: ci
+    needs: ci   # 🔥 HARD GATE: CI must pass first
     runs-on: ubuntu-latest
+
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
 
     steps:
@@ -67,13 +71,13 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}   # ✅ FIXED
 
       - name: Set PR folder
         id: pr
         run: echo "folder=previews/pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
 
-      - name: Sync PR build to S3 (Preview)
+      - name: Deploy Preview to S3
         run: |
           aws s3 sync dist s3://${{ env.S3_BUCKET }}/${{ steps.pr.outputs.folder }} \
             --delete
@@ -97,6 +101,7 @@ jobs:
   # =========================
   cleanup-preview:
     runs-on: ubuntu-latest
+
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
 
     steps:
@@ -104,22 +109,22 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Delete PR folder from S3
+      - name: Delete PR folder
         run: |
           aws s3 rm s3://${{ env.S3_BUCKET }}/previews/pr-${{ github.event.number }} \
             --recursive
 
 
   # =========================
-  # Deploy to DEV Env => AWS (S3 + CloudFront)
+  # DEV DEPLOY
   # =========================
   deploy-dev:
     needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
-    environment: dev   # 👈 MUST match env name in GitHub
+    environment: dev # 👈 MUST match env name in GitHub
 
     steps:
       - uses: actions/download-artifact@v4
@@ -127,13 +132,12 @@ jobs:
           name: build
           path: dist
 
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/dev --delete
 
       - run: |
           aws cloudfront create-invalidation \
@@ -148,7 +152,7 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/staging'
-    environment: staging   # 👈 MUST match env name in GitHub
+    environment: staging # 👈 MUST match env name in GitHub
 
     steps:
       - uses: actions/download-artifact@v4
@@ -159,7 +163,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/staging --delete
 
@@ -176,7 +180,7 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    environment: prod   # 👈 MUST match env name in GitHub
+    environment: prod # 👈 MUST match env name in GitHub
 
     steps:
       - uses: actions/download-artifact@v4
@@ -187,9 +191,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/prod --delete
 
       - run: |
           aws cloudfront create-invalidation \
