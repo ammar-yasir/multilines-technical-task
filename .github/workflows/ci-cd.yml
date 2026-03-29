@@ -61,6 +61,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      pull-requests: write
       issues: write
 
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
