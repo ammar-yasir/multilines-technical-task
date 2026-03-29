@@ -61,6 +61,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      issues: write
 
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
 
@@ -71,11 +72,11 @@ jobs:
           name: build
           path: dist
 
-      # 👇 ADD DEBUG STEP HERE (BEFORE AWS)
-      - name: Debug OIDC token availability
-        run: |
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL=$ACTIONS_ID_TOKEN_REQUEST_URL"
-          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+      # # 👇 ADD DEBUG STEP HERE (BEFORE AWS)
+      # - name: Debug OIDC token availability
+      #   run: |
+      #     echo "ACTIONS_ID_TOKEN_REQUEST_URL=$ACTIONS_ID_TOKEN_REQUEST_URL"
+      #     echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
 
       # 👇 THIS IS YOUR AWS CONFIG STEP
       - name: Configure AWS (OIDC)
