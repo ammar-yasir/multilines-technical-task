@@ -15,7 +15,7 @@ env:
 jobs:
 
   # =========================
-  # CI: lint + test + build
+  # CI (common for all)
   # =========================
   ci:
     runs-on: ubuntu-latest
@@ -29,19 +29,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install
-        run: npm ci
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm run test
-
-      - name: Build
-        run: npm run build
-
-      - name: Upload build artifact
+      - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: build
@@ -49,36 +42,85 @@ jobs:
 
 
   # =========================
-  # Deploy to AWS (S3 + CloudFront)
+  # Deploy DEV
   # =========================
-  deploy:
+  deploy-dev:
     needs: ci
     runs-on: ubuntu-latest
-
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/staging'
+    if: github.ref == 'refs/heads/develop'
+    environment: dev   # 👈 THIS FIXES YOUR ISSUE
 
     steps:
-      - name: Download build
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: build
           path: dist
 
-      # ---- AWS Auth (OIDC - NO ACCESS KEYS) ----
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # ---- Deploy to S3 ----
-      - name: Sync to S3
-        run: |
-          aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
 
-      # ---- Invalidate CloudFront ----
-      - name: CloudFront Invalidation
-        run: |
+      - run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
-            --paths "/*"
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
+
+
+  # =========================
+  # Deploy STAGING
+  # =========================
+  deploy-staging:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/staging'
+    environment: staging   # 👈 MUST match env name in GitHub
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+
+      - run: |
+          aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
+
+
+  # =========================
+  # Deploy PROD
+  # =========================
+  deploy-prod:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: prod   # 👈 MUST match env name
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - run: aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+
+      - run: |
+          aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
