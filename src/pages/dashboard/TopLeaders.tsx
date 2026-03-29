@@ -1,6 +1,11 @@
 import type { FC } from "react";
 import Card from "../../components/Card/Card";
-import type { LeaderProfileItemProps } from "../perspectives/Perspectives.types";
+
+type LeaderProfileItemProps = {
+  name: string;
+  designation: string;
+  proficiency: string;
+};
 
 const leaders: LeaderProfileItemProps[] = [
   {
