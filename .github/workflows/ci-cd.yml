@@ -1,0 +1,214 @@
+name: CI-CD Pipeline
+
+on:
+  push:
+    branches: [develop, staging, main]
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NODE_VERSION: 20
+  S3_BUCKET: ${{ secrets.S3_BUCKET }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+
+  # =========================
+  # CI: lint + test + build
+  # =========================
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: dist
+
+
+  # =========================
+  # PR PREVIEW DEPLOYMENT
+  # (RUNS ONLY IF CI PASSES)
+  # =========================
+  deploy-preview:
+    needs: ci   # 🔥 HARD GATE: CI must pass first
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      # # 👇 ADD DEBUG STEP HERE (BEFORE AWS)
+      # - name: Debug OIDC token availability
+      #   run: |
+      #     echo "ACTIONS_ID_TOKEN_REQUEST_URL=$ACTIONS_ID_TOKEN_REQUEST_URL"
+      #     echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+
+      # 👇 THIS IS YOUR AWS CONFIG STEP
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}   # ✅ FIXED
+
+      - name: Set PR folder
+        id: pr
+        run: echo "folder=previews/pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
+
+      - name: Deploy Preview to S3
+        run: |
+          aws s3 sync dist s3://${{ env.S3_BUCKET }}/${{ steps.pr.outputs.folder }} \
+            --delete
+
+      - name: Comment Preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.issue.number;
+            const url = `https://${{ secrets.CLOUDFRONT_DOMAIN }}/previews/pr-${pr}/`;
+
+            github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr,
+              body: `🚀 PR Preview is ready:\n\n${url}`
+            });
+
+
+  # =========================
+  # PR CLEANUP
+  # =========================
+  cleanup-preview:
+    runs-on: ubuntu-latest
+
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+
+    steps:
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete PR folder
+        run: |
+          aws s3 rm s3://${{ env.S3_BUCKET }}/previews/pr-${{ github.event.number }} \
+            --recursive
+
+
+  # =========================
+  # DEV DEPLOY
+  # =========================
+  deploy-dev:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: dev # 👈 MUST match env name in GitHub
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/dev --delete
+
+      - run: |
+          aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
+
+
+  # =========================
+  # Deploy STAGING
+  # =========================
+  deploy-staging:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/staging'
+    environment: staging # 👈 MUST match env name in GitHub
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/staging --delete
+
+      - run: |
+          aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
+
+
+  # =========================
+  # Deploy PROD
+  # =========================
+  deploy-prod:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: prod # 👈 MUST match env name in GitHub
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: aws s3 sync dist s3://${{ env.S3_BUCKET }}/prod --delete
+
+      - run: |
+          aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_ID }} \
+          --paths "/*"
