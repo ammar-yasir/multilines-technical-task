@@ -77,7 +77,11 @@ npm run dev
 #### Run Locally
 [http://localhost:5173/](http://localhost:5173/)
 
-
+##### Login credentials:
+```bash
+Username: emilys
+Password: emilyspass
+```
 #### Test:
 ```bash
 npm run test
